@@ -5,6 +5,8 @@ def ldaPreprocess (docs):
     # Create Dictionary
     id2word = corpora.Dictionary(docs)
 
+    # id2word.filter_extremes(no_below=0.1*len(docs), no_above=0.8)
+
     # Term Document Frequency
     corpus = [id2word.doc2bow(text) for text in docs]
 

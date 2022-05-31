@@ -1,8 +1,5 @@
 import glob
 import docx
-import numpy as np
-import pandas as pd
-import tqdm
 
 import nltk
 from nltk.corpus import stopwords
@@ -12,7 +9,7 @@ nltk.download('stopwords')
 nltk.download('punkt')
 
 stopwords_list = ["ok", 'u', "1", "one", "yea", "2", "u", "oh", "also", "yeah", "00", "okay", "", "hm", "haha", "5l", "mm", 
-                    "k", "b", "le", "u", "lo", "p", "unintelligible"]
+                    "k", "b", "le", "u", "lo", "p", "unintelligible", "actually", "subtitle"]
 
 def preprocess (path):
     print (f"Path: {path}")
@@ -22,7 +19,6 @@ def preprocess (path):
 
     for file in files:
         paras = docx.Document(file).paragraphs
-        include = False
         if paras != None:
             for para in paras:
                 para = para.text
@@ -55,6 +51,5 @@ def preprocess (path):
             tokenized_and_cleaned_doc.append(tokens_without_sw)
 
     print(f"{len(tokenized_and_cleaned_doc)} documents generated.")
-    # print (f"First 5 documents: {tokenized_and_cleaned_doc[:5]}")
     
     return tokenized_and_cleaned_doc

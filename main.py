@@ -13,6 +13,9 @@ from word2vec import *
 from bert import *
 from utility import *
 
+#TODO
+#check why cTFIDF sometimes report 1 lesser column than the input 
+
 def executeLDA (input):
     tokens, corpus, dictionary, k, a, b, passes, path, filename = input
     model = computeLDA (corpus, dictionary, k, a, b, passes)
@@ -26,7 +29,7 @@ def executeLDA (input):
     df = pd.DataFrame([["LDA", filename, a, b, k, model.print_topics(num_topics=-1, num_words=10), cv_score, cuci_score]])
     print (df)
 
-    df.to_csv(f'{path}\\LDA-Results.csv', mode='a', header=False)
+    df.to_csv(f'{path}\\test-lda-delete.csv', mode='a', header=False)
 
 def ldaProcess (corpuses):
     lda_input = [[corpus[0], ldaPreprocess(corpus[0]), corpus[1]] for corpus in corpuses]
@@ -37,12 +40,14 @@ def ldaProcess (corpuses):
     topics_range = range(min_topics, max_topics, step_size)
 
     # Alpha parameter
-    alpha = list(np.arange(0.01, 1, 0.3))
+    #alpha = list(np.arange(0.001, 0.5, 0.05))
+    alpha = list(np.arange(0.01, 1.0, 0.3))
     alpha.append('symmetric')
     alpha.append('asymmetric')
 
     # Beta parameter
-    beta = list(np.arange(0.01, 1, 0.3))
+    #beta = list(np.arange(0.001, 0.3, 0.05))
+    beta = list(np.arange(0.01, 1.0, 0.3))
     beta.append('symmetric')
 
     import tqdm
@@ -54,11 +59,14 @@ def ldaProcess (corpuses):
             pbar.update(1)
 
 def executeWord2Vec (input):
-    corpus, filtered_corpus, embeddings, id2word, num_of_topics, path, filename = input
-    topics = cluster(filtered_corpus, embeddings, num_of_topics)
+    tokens, embeddings, id2word, num_of_topics, path, filename = input
+
+    print ("Clustering")
+    sentence_clusters = cluster(tokens, embeddings, num_of_topics)
+    topics = cluster_with_ctfidf(deepcopy(sentence_clusters))
 
     print ("Calculating coherence")
-    cv_score, cuci_score = computeCoherenceValues(tokens=corpus, id2word=id2word, topics=topics, process_num=1)
+    cv_score, cuci_score = computeCoherenceValues(tokens=tokens, id2word=id2word, topics=topics, process_num=1)
 
     print ("Writing file")
     if not os.path.exists(os.path.join(path, filename)):
@@ -69,13 +77,14 @@ def executeWord2Vec (input):
     df = pd.DataFrame([["Word2Vec", filename, num_of_topics, [topic[:10] for topic in topics.values()], cv_score, cuci_score]])
     print (df)
 
-    df.to_csv(f'{path}\\Word2Vec-Results.csv', mode='a', header=False)
+    df.to_csv(f'{path}\\Word2Vec-Sentence-Results.csv', mode='a', header=False)
 
 def word2VecProcess (corpuses):
     #load Word2Vec model
     from gensim.models import KeyedVectors
     print ("Loading Word2Vec Model")
     word2vec = KeyedVectors.load("Google-News-Vectors")
+    vec_dim = 300
 
     #initialize parameters
     min_topics = 2
@@ -87,16 +96,23 @@ def word2VecProcess (corpuses):
 
     for corpus in corpuses:
         _, id2word = ldaPreprocess(corpus[0])
+        print(id2word)
         filename = corpus[1]
 
-        flattened_corpus = []
-        for token in corpus[0]:
-            flattened_corpus.extend(token)
+        sentence_embeddings = np.array([
+                                    np.mean([word2vec[w] for w in tokens if w in word2vec]
+                                        or [np.zeros(vec_dim)], axis=0)
+                                            for tokens in corpus[0]
+                                                ])
 
-        filtered_corpus = [word for word in flattened_corpus if word2vec.has_index_for(word)] 
+        # flattened_corpus = []
+        # for token in corpus[0]:
+        #     flattened_corpus.extend(token)
+
+        #filtered_corpus = [word for word in flattened_corpus if word2vec.has_index_for(word)] 
         
-        for i in topics_range:
-            tasks.append((corpus[0], filtered_corpus, word2vec[filtered_corpus], id2word, i, "Results", filename))
+        for topic_num in topics_range:
+            tasks.append((corpus[0], sentence_embeddings, id2word, topic_num, "Results", filename))
 
     import tqdm
     pbar = tqdm.tqdm(total=len(tasks))
@@ -113,7 +129,6 @@ def bertProcess (corpuses, tokenizer, model):
     topics_range = range(min_topics, max_topics, step_size)
     
     tasks = []
-    index = 0
 
     for corpus in corpuses:
         _, id2word = ldaPreprocess(corpus[0])
@@ -158,6 +173,64 @@ def executeBert (input):
 
     df.to_csv(f'{path}\\Bert-Results.csv', mode='a', header=False)
 
+def sentenceBertProcess (corpuses, model):
+    #initialize parameters
+    min_topics = 2
+    max_topics = 52
+    step_size = 2
+    topics_range = range(min_topics, max_topics, step_size)
+    
+    tasks = []
+
+    for corpus in corpuses:
+        _, id2word = ldaPreprocess(corpus[0])
+        filename = corpus[1]
+
+        docs_strings = [" ".join(doc) for doc in corpus[0]]
+
+        sentence_embeddings = model.encode(sentences=docs_strings, show_progress_bar=True)
+
+        # flattened_corpus = []
+        # for token in corpus[0]:
+        #     flattened_corpus.extend(token)
+
+        # bert_sequences = splitBertInputSequences(corpus[0], tokenizer)
+        # split_embeddings = computeBertEmbeddings(bert_sequences, tokenizer, model)
+        # combined_embeddings = combineBertOutput(split_embeddings)
+
+        for i in topics_range:
+            tasks.append((corpus[0], sentence_embeddings, id2word, i, "Results", filename))
+        
+    import tqdm
+    pbar = tqdm.tqdm(total=len(tasks))
+    
+    with Pool(8) as pool:
+        for _ in tqdm.tqdm(pool.map(executeSentenceBert, tasks), total=len(tasks)):
+            pbar.update(1)
+
+    pbar.close()
+
+    
+def executeSentenceBert (input):
+    corpus, embeddings, id2word, num_of_topics, path, filename = input
+
+    print ("Clustering")
+    sentence_clusters = cluster(corpus, embeddings, num_of_topics)
+    topics = cluster_with_ctfidf(deepcopy(sentence_clusters))
+
+    print ("Calculating coherence")
+    cv_score, cuci_score = computeCoherenceValues(tokens=corpus, id2word=id2word, topics=topics, process_num=1)
+
+    print ("Writing file")
+    if not os.path.exists(os.path.join(path, filename)):
+        #table columnns: model, corpus name, Number of Topics, Topics - Top 10 Words, CV Score, C_UCI Score
+        df_header = pd.DataFrame(columns=["Model", "Corpus", "Number of Topics", "Top Words", "CV Score", "C_UCI Score"])
+        df_header.to_csv(f'{path}\\Test-SentenceBert-Results', header=True)
+
+    df = pd.DataFrame([["BERT - Sentence", filename, num_of_topics, [topic[:10] for topic in topics.values()], cv_score, cuci_score]])
+
+    df.to_csv(f'{path}\\SentenceBert-Results-Scikit-Cluster.csv', mode='a', header=False)
+
 def executeLFLDA (input):
     corpus, k, a, b, l, filename = input
 
@@ -193,27 +266,37 @@ def lfldaProcess (corpuses):
         for _ in tqdm.tqdm(pool.map(executeLFLDA, tasks), total=len(tasks)):
             pbar.update(1)
 
-def lfldaComputeCoherence ():
-        pass
-
 if __name__ == "__main__":
     print ("Starting Processes")
     folder_path = "C:\\Users\\ncy_k\\Desktop\\EMBRACE Redacted Transcripts\\Compiled Data\\"
-    files = ["Compiled Data Challenges - SAC Staff.docx", "Compiled Data Challenges.docx", "Compiled Data Challenges - Volunteer.docx"]
+    files = ["Compiled Data Challenges.docx", "Compiled Data Challenges - Volunteer.docx", "Compiled Data Challenges - SAC Staff.docx"]
+    
     file_paths = [folder_path+file for file in files]
 
     # process docs, filename
     input_corpus = [[preprocess(file), files[index].replace(".docx", "")] for index, file in enumerate(file_paths)]
+    # import sklearn.datasets as dataset
+    # data = dataset.fetch_20newsgroups(subset='all', remove=("headers","footers"))
+    # para_list = data['data']
+    # input_corpus = [[preprocess(para_list), "20newsgroup_dataset"]]
 
-    from transformers import BertTokenizer, BertModel
-    model = BertModel.from_pretrained("bert-based-uncased-pytorch", output_hidden_states=True)
-    tokenizer = BertTokenizer.from_pretrained('bert-base-uncased-tokenizer')
-    model.eval()
+    from sentence_transformers import SentenceTransformer
 
-    bertWorker = mp.Process(target=bertProcess, args=(input_corpus, tokenizer, model,))
+    model = SentenceTransformer("distilbert-base-nli-mean-tokens")
+
+    bertWorker = mp.Process(target=sentenceBertProcess, args=(input_corpus, model,))
     bertWorker.start()
     bertWorker.join()
 
+    # from transformers import BertTokenizer, BertModel
+    # model = BertModel.from_pretrained("bert-based-uncased-pytorch", output_hidden_states=True)
+    # tokenizer = BertTokenizer.from_pretrained('bert-base-uncased-tokenizer')
+    # model.eval()
+
+    # bertWorker = mp.Process(target=bertProcess, args=(input_corpus, tokenizer, model,))
+    # bertWorker.start()
+    # bertWorker.join()
+    
     # word2vecWorker = mp.Process(target=word2VecProcess, args=(input_corpus,))
 
     # word2vecWorker.start()
